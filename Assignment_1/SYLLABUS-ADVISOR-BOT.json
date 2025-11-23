@@ -1,0 +1,234 @@
+{
+  "name": "SYLLABUS-ADVISOR-BOT",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        208
+      ],
+      "id": "36b72af0-ed46-4540-b4de-655b31482aaa",
+      "name": "Telegram Trigger",
+      "webhookId": "292c1221-81b8-452d-8a0d-552a4a77f7fc",
+      "credentials": {
+        "telegramApi": {
+          "id": "1yBtgLeMDnYliJkE",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract Telegram message and normalize into { query, chatId }\nconst msg = $json.message || {};\nconst text = (msg.text || '').trim();\nconst chatId = msg.chat?.id;\n\nif (!text) {\n  throw new Error('No text message received from Telegram.');\n}\n\nreturn [{\n  json: {\n    query: text,   // question from user\n    chatId        // for reply\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        208
+      ],
+      "id": "325ed934-ae58-459f-b872-1ded4934a454",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        448,
+        432
+      ],
+      "id": "04566e38-5d1f-466a-aca6-d10ead2e9f57",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "1BSMIHKBs8M2UkWy",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.query }}\n\n",
+        "options": {
+          "systemMessage": "You are the Syllabus Advisor AI.\n\nThe syllabus is stored in Pinecone as text chunks. It is mostly a table with columns like Topic, NCERT chapter, Priority, and Practice_Hrs.\n\nYou must ALWAYS:\n1. Call the Pinecone Syllabus Search tool to retrieve relevant chunks.\n2. Read ALL retrieved chunks carefully.\n3. Answer using ONLY information from those chunks.\n\nInterpretation rules:\n- When the user says “module” or “chapter”, treat it as referring to the Topic / NCERT chapter structure in the table.\n- Ignore filler confirmations like “yes go ahead” or “okay” when forming search queries. Focus on the last actual question.\n\nLOCAL questions (one row or a few rows)\n- Examples: “What is the practice time for Trigonometry?”, “Which topics are HIGH priority?”\n- Give a direct, precise answer from the chunks.\n- Include brief context (topic name, chapter, priority, hours).\n\nLIST questions (global view)\n- Examples: “List all topics”, “What are the modules?”, “Give the full syllabus”, “List all HIGH priority topics”.\n- Use every retrieved chunk to build the MOST COMPLETE list you can.\n- On the FIRST attempt, do NOT refuse. Even if you are not sure the list is complete, you MUST:\n  • list all topics you can clearly see, and\n  • start with: “Based on the syllabus sections I can see, …”\n- You are allowed to give a partial list with a caveat. This is better than refusing.\n\nRefusals:\n- Only say “This information is not available in the syllabus.” when there is absolutely no related content in ANY of the retrieved chunks (for example, user asks about a topic or field that simply never appears in the table).\n- Never invent topics, chapters or hours that do not appear in the retrieved chunks.\n\nTone:\n- Be concise and structured (bullet lists or numbered lists).\n- At the end of each answer, you may add one short follow-up suggestion, e.g.:\n  “If you want, I can also tell you which topics are HIGH priority or how many hours are allocated in total.”\n"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [
+        480,
+        208
+      ],
+      "id": "1db229ae-05e7-4eed-8709-24775877b718",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.from.id }}",
+        "text": "={{ $json.output }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        944,
+        208
+      ],
+      "id": "c435a3cf-6d81-4ec7-b8b0-d18d71f08ecd",
+      "name": "Send a text message",
+      "webhookId": "c6293289-539e-4371-b9a8-ac107b8f9d10",
+      "credentials": {
+        "telegramApi": {
+          "id": "1yBtgLeMDnYliJkE",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "retrieve-as-tool",
+        "toolDescription": "Look up the uploaded syllabus and return the most relevant sections for the user's question.\n",
+        "pineconeIndex": {
+          "__rl": true,
+          "value": "icn8n-1536",
+          "mode": "list",
+          "cachedResultName": "icn8n-1536"
+        },
+        "topK": 15,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStorePinecone",
+      "typeVersion": 1.3,
+      "position": [
+        576,
+        432
+      ],
+      "id": "dee01e5e-95f8-4422-97cc-c62639b07b02",
+      "name": "Pinecone - Syllabus search",
+      "credentials": {
+        "pineconeApi": {
+          "id": "cjuXh9Xa7j0YG4w4",
+          "name": "PineconeApi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        656,
+        640
+      ],
+      "id": "ca6a7536-a02f-4661-aeaa-71eb476d908a",
+      "name": "Embeddings OpenAI",
+      "credentials": {
+        "openAiApi": {
+          "id": "1BSMIHKBs8M2UkWy",
+          "name": "OpenAi account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pinecone - Syllabus search": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OpenAI": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Pinecone - Syllabus search",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "b65f2ace-3d11-4852-a540-18dac17eeea8",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f8d04990b3f25ad27cebebebb7da872b45e05b8a75c457c656fcc71eaa7f315a"
+  },
+  "id": "HlkygMnQ8oFGY3g6",
+  "tags": []
+}
