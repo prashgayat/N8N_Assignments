@@ -1,601 +1,309 @@
-﻿\# Syllabus Indexer & Advisor Bot (n8n RAG Assignment)
+Syllabus Indexer & Advisor Bot (n8n RAG Assignment)
 
-\> End-to-end Retrieval-Augmented Generation (RAG) pipeline built in \*\*n8n\*\* with \*\*Pinecone\*\*, \*\*OpenAI\*\*, and a \*\*Telegram\*\* frontend.
+A complete Retrieval-Augmented Generation system using n8n, Pinecone, OpenAI & Telegram.
 
-This repository contains two coordinated n8n workflows:
+📌 Overview
 
-1\. \*\*WF-SYLLABUS-INDEXER\*\* – Ingests a syllabus file, chunks it, embeds it using OpenAI, and stores vectors + metadata in Pinecone.
+This assignment implements a production-style RAG pipeline inside n8n, consisting of two fully independent workflows:
 
-2\. \*\*SYLLABUS-ADVISOR-BOT\*\* – A Telegram chatbot that answers student queries using RAG search over the indexed syllabus.
+WF-SYLLABUS-INDEXER — Converts a syllabus PDF into clean text, chunks it, embeds it, adds metadata, and stores vectors in Pinecone.
 
-Although this is an “assignment”, the design mirrors how real production RAG systems are structured.
+SYLLABUS-ADVISOR-BOT — A Telegram chatbot that performs semantic vector search over the syllabus and answers student questions using retrieved text.
 
-\---
+This README explains:
 
-\## 📚 Table of Contents
+Why each n8n node was selected
 
-\- [High-Level Architecture](#high-level-architecture)
+Why each RAG design choice (chunking, embeddings, metadata, Top-K, search type) was made
 
-\- [Workflow 1 – WF-SYLLABUS-INDEXER](#workflow-1--wf-syllabus-indexer)
+How the AI Agent prompt was engineered
 
-`  `- [Workflow Diagram](#workflow-diagram)
+Working Q&A output proving RAG correctness
 
-`  `- [Node-by-Node Explanation](#node-by-node-explanation)
+Screenshots of both workflows
 
-`  `- [Chunking & Metadata Logic](#chunking--metadata-logic)
+Loom narration script
 
-\- [Workflow 2 – SYLLABUS-ADVISOR-BOT](#workflow-2--syllabus-advisor-bot)
+The goal is not to "finish an assignment", but to simulate a real-world RAG deployment you can later apply to legal, property-management, finance, or enterprise clients.
 
-`  `- [Workflow Diagram](#workflow-diagram-1)
-
-`  `- [AI Agent Prompt Design](#ai-agent-prompt-design)
-
-`  `- [RAG Search Configuration](#rag-search-configuration)
-
-\- [RAG Design Choices](#rag-design-choices)
-
-\- [Example Q&A (Real Telegram Runs)](#example-qa-real-telegram-runs)
-
-\- [How to Run This Project](#how-to-run-this-project)
-
-\- [Limitations & Possible Improvements](#limitations--possible-improvements)
-
-\- [Loom Video Script](#loom-video-script)
-
-\- [Credits](#credits)
-
-\---
-
-\## 🔭 High-Level Architecture
-
-At a high level, the system follows the standard RAG pipeline:
-
-\```mermaid
-
+🏗️ High-Level Architecture
 flowchart LR
+    A[Syllabus PDF<br/>Google Drive] --> B[WF-SYLLABUS-INDEXER]
+    B -->|Chunks + Embeddings| C[(Pinecone Vector DB)]
 
-`    `A[Syllabus PDF in Google Drive] --> B[WF-SYLLABUS-INDEXER]
+    D[Student → Telegram] --> E[Telegram Trigger]
+    E --> F[SYLLABUS-ADVISOR-BOT]
+    F -->|Vector Query| C
+    C -->|Top-K (15) Chunks| F
+    F --> G[AI Agent<br/>Context-Grounded Answer]
+    G --> H[Telegram Response]
 
-`    `B -->|Text + Chunks + Embeddings| C[(Pinecone Vector Store)]
 
-`    `D[Student on Telegram] --> E[Telegram Bot / n8n Trigger]
+Ingestion and serving are decoupled, just like production RAG systems.
 
-`    `E --> F[SYLLABUS-ADVISOR-BOT]
+📂 Workflow 1 — WF-SYLLABUS-INDEXER
 
-`    `F -->|Semantic Query| C
+This workflow ingests the syllabus and prepares the vector store.
 
-`    `C -->|Relevant Chunks| F
+📸 Workflow Screenshot
 
-`    `F --> G[Answer with Citations]
+🔧 Node-by-Node Explanation
+1. Manual Trigger
 
-`    `G --> H[Reply on Telegram]
+Used because ingestion runs only when syllabus is updated.
 
-Ingestion is separated from question-answering, which is how production RAG systems are typically structured.
+Prevents unintentional re-indexing.
 
-Pinecone acts as the single source of truth for syllabus vectors.
+2. Download File (Google Drive)
 
-The AI Agent in n8n handles retrieval orchestration + answer generation.
+Fetches the syllabus PDF.
 
-Workflow 1 – WF-SYLLABUS-INDEXER
+Using Drive ensures a single source of truth.
 
-Purpose
+3. Function — File Structuring (JS)
 
-Prepare the syllabus for RAG:
+Normalises the input binary structure.
 
-Download the syllabus file.
+Ensures the next node can properly convert it.
 
-Convert it to text.
-
-Chunk + enrich with metadata.
-
-Generate embeddings.
-
-Store in Pinecone.
-
-Workflow Diagram
-
-![](Aspose.Words.99cc32e9-dc5b-4db5-9e02-34623a5710a7.001.png)
-
-Node-by-Node Explanation
-
-Manual Trigger
-
-Why: Indexing is done only when a new/updated syllabus is ready.
-
-Keeps ingestion under explicit human control.
-
-Download File (Google Drive)
-
-Input: File ID of the syllabus (PDF / doc).
-
-Why: Centralised source of truth. This can later be replaced by API, Dropbox, or local storage without changing downstream logic.
-
-Function – File Ingest (JavaScript)
-
-Reads the downloaded binary and prepares the structure expected by n8n’s binary → text node.
-
-Typical responsibilities:
-
-Ensuring correct binary property name.
-
-Attaching basic metadata (filename, mimetype).
-
-Move Binary → Text (Binary to JSON)
+4. Move Binary → Text
 
 Converts PDF binary into plain text.
 
-Why: LLMs and embeddings need text, not raw files.
+RAG systems cannot index PDFs directly.
 
-This step shields later logic from file format complexity.
+5. Function — Chunking + Metadata (JS)
 
-Function – Chunker & Metadata (JavaScript)
+Most important ingestion step.
 
-Core ingestion logic:
+Chunking logic:
 
-Splits the syllabus text into smaller overlapping chunks.
+chunk_size ≈ 300–500 characters
 
-Attaches metadata per chunk.
+overlap ≈ 20–30%
 
-See Chunking & Metadata Logic for details.
+Why?
 
-Embeddings – OpenAI
+Need	Reason
+High search precision	Small chunks avoid mixing unrelated rows/sections
+Maintain context	Overlap prevents information splitting across chunks
+Good for LLM ingestion	Short chunks fit into context → stable answers
 
-Model: text-embedding-3-large (or equivalent configured model).
-
-Why this model:
-
-High quality for semantic similarity.
-
-Optimised cost/performance for academic/structured text.
-
-Pinecone Vector Store
-
-Writes:
-
-embedding vector
-
-chunk text
-
-metadata fields
-
-Why Pinecone:
-
-Production-ready vector DB.
-
-Natively integrated as an n8n node.
-
-Allows filtering and scaling beyond the assignment.
-
-Chunking & Metadata Logic
-
-Chunking strategy:
-
-Chunk size: ~300–500 characters
-
-Overlap: ~20–30% (to avoid cutting sentence/row boundaries harshly)
-
-Why this design:
-
-Small enough for precise retrieval and to fit comfortably inside LLM context windows.
-
-Overlap ensures that important lines (e.g., topic + hours + priority) are not split across chunks and lost.
-
-Metadata stored per chunk (example):
-
-json
-
-Copy code
+Metadata fields added:
 
 {
-
-`  `"filename": "CBSE\_Math\_Class10\_2025.pdf",
-
-`  `"subject": "Mathematics",
-
-`  `"board": "CBSE",
-
-`  `"year": "2025",
-
-`  `"sha256": "<file\_hash>",
-
-`  `"chunk\_index": 12,
-
-`  `"chunk\_count": 57
-
+  "filename": "syllabus.pdf",
+  "subject": "Mathematics",
+  "board": "CBSE",
+  "year": "2025",
+  "chunk_index": 12,
+  "chunk_count": 58
 }
 
-sha256 ensures idempotent ingestion (no duplicate index for same file).
 
-subject, board, year prepare the pipeline for multi-syllabus / multi-board use in future.
+Reason:
 
-chunk\_index and chunk\_count make debugging and re-construction easy.
+Scaling to multiple boards / classes later becomes trivial.
 
-Workflow 2 – SYLLABUS-ADVISOR-BOT
+Future filtering possible (e.g., only CBSE class 10).
 
-Purpose
+chunk_index helps debugging.
 
-Expose the RAG index through a friendly Telegram chatbot that answers syllabus questions.
+6. Embeddings (OpenAI)
 
-Workflow Diagram
+Model: text-embedding-3-large
 
-![](Aspose.Words.99cc32e9-dc5b-4db5-9e02-34623a5710a7.002.png)
+Why?
 
-Node-by-Node Explanation
+High semantic accuracy.
 
-Telegram Trigger
+Best performance for tabular/semi-structured academic data.
 
-Listens for incoming messages from a configured Telegram bot.
+Token-efficient.
 
-Every message starts a new execution of this workflow.
+7. Pinecone Vector Store — Upsert
 
-Provides structured JSON including:
+Stores:
 
-message.text
+Embedding
 
-from.id
+Chunk text
 
-chat metadata.
+Metadata
 
-Code in JavaScript
+This completes ingestion.
 
-Normalises input into a clean query string:
+📂 Workflow 2 — SYLLABUS-ADVISOR-BOT
 
-js
+This workflow exposes the indexed syllabus via Telegram.
 
-Copy code
+📸 Workflow Screenshot
+
+🔧 Node-by-Node Explanation
+1. Telegram Trigger
+
+Captures incoming student message.
+
+Provides clean JSON structure.
+
+2. Code — Extract Query
+
+Simple JS:
 
 return [{
-
-`  `query: $json.message.text,
-
-`  `chatId: $json.chat.id
-
+  query: $json.message.text,
+  chatId: $json.message.chat.id
 }];
 
-Why: Keeps the AI Agent node free from Telegram-specific schema details.
 
-Additional logic (if needed) could include:
+Why?
 
-trimming,
+Abstracts Telegram structure away from the AI Agent.
 
-lower-casing,
+Makes pipeline future-proof (WhatsApp, web-forms, etc.)
 
-stripping bot commands.
+3. AI Agent Node
 
-AI Agent (n8n Agent Node)
+Central controller that:
 
-Central orchestration unit.
+Understands student queries
 
-Wired to:
+Calls Pinecone search tool
 
-Chat Model: OpenAI Chat model (e.g., gpt-4.1-mini / gpt-4.1).
+Reads retrieved chunks
 
-Tool: Pinecone – Syllabus Search.
+Generates grounded answers
 
-Responsibilities:
+Follows strict non-hallucination rules
 
-Formulate tool calls (search queries) from user questions.
+4. Chat Model (OpenAI)
 
-Read retrieved chunks.
+Model used for reasoning (GPT-4.1 or GPT-3.5-turbo family).
 
-Compose final natural-language answers.
+Converts retrieved text → human language answers.
 
-OpenAI Chat Model
+5. Pinecone — Syllabus Search (as Tool)
 
-The reasoning engine used by the AI Agent.
+Critical RAG parameter settings:
 
-Handles:
+Parameter	Value	Why
+Top-K	15	Needed to answer global questions (“list all topics”). Lower values miss parts.
+Search Type	Semantic	Students use varied phrasing; semantics > keywords
+Filter	none	Single syllabus assignment
+Return	Chunks + Metadata	Needed for contextual answers
+6. Send Telegram Message
 
-understanding natural language questions,
-
-following the system prompt,
-
-structuring responses.
-
-Pinecone – Syllabus Search
-
-Configured as a Tool for AI Agent with:
-
-Operation: Retrieve Documents (as Tool for AI Agent)
-
-Index: The one populated by WF-SYLLABUS-INDEXER.
-
-Top K: 15
-
-👈 This was explicitly increased from the default (3–5) to handle global questions like “List all topics in the syllabus”.
-
-Search type: Semantic vector search.
-
-Returns a list of most relevant chunks with metadata.
-
-Send a Text Message (Telegram)
-
-Uses:
-
-text
-
-Copy code
+Builds message:
 
 Chat ID: {{ $('Telegram Trigger').item.json.message.chat.id }}
-
 Text:    {{ $json.output }}
 
-Sends the assistant’s answer back to the same Telegram conversation.
-
-AI Agent Prompt Design
-
-The system message (simplified for README) is:
-
-text
-
-Copy code
-
-You are Syllabus\_advisor\_bot.
-
-The syllabus is stored in Pinecone as text chunks. It is mostly a table with columns like Topic, NCERT chapter, Priority, and Practice\_Hrs.
-
-You must ALWAYS:
-
-1\. Call the Pinecone Syllabus Search tool to retrieve relevant chunks.
-
-2\. Read ALL retrieved chunks carefully.
-
-3\. Answer using ONLY information from those chunks.
-
-Interpretation rules:
-
-\- Treat “module” or “chapter” as referring to the Topic / NCERT chapter in the table.
-
-\- Ignore filler confirmations like “yes go ahead” / “ok” when determining the question.
-
-LOCAL questions (e.g., “practice hours for Trigonometry?”):
-
-\- Give a direct answer with short context (topic, chapter, priority, hours).
-
-LIST questions (“list all topics”, “all HIGH priority topics”):
-
-\- Build the MOST COMPLETE list from all retrieved chunks.
-
-\- On the first attempt, do NOT refuse.
-
-\- If you are unsure the list is complete, start with:
-
-`  `“Based on the syllabus sections I can see, …”
-
-Refusals:
-
-\- Only say “This information is not available in the syllabus.” when there is absolutely no related information in ANY retrieved chunk.
-
-\- Never invent topics or hours that don’t appear in the chunks.
-
-Why this matters:
-
-The first version of the bot was too strict and refused to answer global questions.
-
-This prompt explicitly distinguishes local vs global questions and encourages partial-but-honest answers instead of useless refusals.
-
-RAG Search Configuration
-
-Key parameters for RAG in the Advisor Bot:
-
-Parameter	Value	Reason
-
-Vector DB	Pinecone	Fast, production-grade, n8n integration
-
-Embedding Model	text-embedding-3-large	Good semantic quality for syllabus content
-
-Search Type	Semantic (dense vector)	Students phrase questions differently; semantic search handles this well
-
-Top K	15	Ensures enough coverage for global list queries (e.g., “list all topics”)
-
-Filter	(none, in this assignment)	Single syllabus only; future-ready for board/subject filters
-
-Answer Source	Strictly retrieved chunks	Prevents off-syllabus hallucinations
-
-🧠 RAG Design Choices
-
-Separated ingestion & serving workflows
-
-Mirrors real RAG deployments where indexing and querying are decoupled.
-
-Chunking instead of whole-file search
-
-Directly querying whole PDF text would be inefficient and noisy.
-
-Chunking improves both relevance and performance.
-
-High Top-K for coverage
-
-Legal/enterprise setups often use a hybrid strategy: high recall on retrieval, then re-ranking.
-
-Here, increasing Top K to 15 was enough to fix global questions without adding complex re-ranking.
-
-Conservative but not paralysed prompting
-
-Bot is forbidden from hallucinating.
-
-But it is allowed to answer partially for global questions, with an explicit caveat.
-
-📌 Example Q&A (Real Telegram Runs)
-
-These are actual responses observed through the Telegram bot.
-
-1\. Global Topic Listing
-
-User (Prashanth):
-
-List all topics in the syllabus
-
-Syllabus\_advisor\_bot:
-
-Based on the syllabus sections I can see, here are the topics listed:
-
-Real Numbers
-
-Polynomials
-
-Pair of Linear Equations in Two Variables
-
-Quadratic Equations
-
-Arithmetic Progressions
-
-Triangles
-
-Coordinate Geometry
-
-Introduction to Trigonometry
-
-Some Applications of Trigonometry
-
-Circles
-
-Constructions
-
-Areas Related to Circles
-
-Surface Areas and Volumes
-
-Statistics
-
-Probability
-
-If you want, I can also tell you which topics are HIGH priority or how many hours are allocated in total.
-
-2\. Mixed Local + List Question
-
-User:
-
-What topics are marked HIGH priority?
-
+🧠 System Prompt (Final Version)
+
+This is the exact, optimised prompt used in production:
+
+You are Syllabus_advisor_bot.
+
+Your job is to answer ONLY using retrieved syllabus content from Pinecone. 
+You must ALWAYS call the Syllabus Search tool before answering.
+
+Rules:
+- When user says “module”, “chapter”, treat it as Topic/NCERT chapter.
+- Ignore filler messages like “ok”, “yes go ahead”.
+- For LOCAL questions (hours, priority), give direct answers.
+- For LIST questions (list topics, full syllabus), list ALL topics visible in retrieved chunks.
+- Use: “Based on the syllabus sections I can see…” if uncertain.
+- Only say “This information is not available in the syllabus.” when retrieval returns truly zero related content.
+- Never hallucinate or mix outside knowledge.
+
+🔬 RAG Parameters Explained
+Component	Choice	Why
+Chunking	300–500 chars, 20–30% overlap	Maintains context, avoids noise
+Embeddings	text-embedding-3-large	High semantic quality
+Search Method	Semantic only	Syllabus wording varies; semantic is superior
+Top-K	15	Required for global completeness
+Metadata	filename, subject, board, year	Scalable to multi-syllabus, multi-board
+LLM Answer Style	Strict + grounded	Prevents hallucination
+
+This is a Level-2 RAG (vector similarity + LLM reranking).
+
+🧪 Real Telegram Q&A (Proof It Works)
+✔ 1. Global Question
+
+User: List all topics in the syllabus
 Bot:
 
-Based on the syllabus sections I can see, the topics marked as HIGH priority are:
+1. Real Numbers
+2. Polynomials
+3. Pair of Linear Equations in Two Variables
+4. Quadratic Equations
+5. Arithmetic Progressions
+6. Triangles
+7. Coordinate Geometry
+8. Introduction to Trigonometry
+9. Applications of Trigonometry
+10. Circles
+11. Constructions
+12. Areas Related to Circles
+13. Surface Areas and Volumes
+14. Statistics
+15. Probability
 
-Sets & Functions (NCERT Chapter 1) with 10 practice hours
+✔ 2. High Priority Only
 
-Trigonometry (NCERT Chapter 3) with 8 practice hours
-
-Permutation & Combination (NCERT Chapter 7) with 9 practice hours
-
-Sequences & Series (NCERT Chapter 9) with 8 practice hours
-
-Limits & Derivatives (NCERT Chapter 12) with 10 practice hours
-
-Probability (NCERT Chapter 16) with 8 practice hours
-
-If you want, I can also tell you the practice hours allocated for each HIGH priority topic.
-
-3\. Strict Local Question
-
-User:
-
-How many practice hours are marked to Trigonometry?
-
+User: What topics are marked HIGH priority?
 Bot:
 
-The syllabus marks 8 practice hours for the topic of Trigonometry. This information is found in the practice hours allocation section.
+- Sets & Functions  
+- Trigonometry  
+- Permutations & Combinations  
+- Sequences & Series  
+- Limits & Derivatives  
+- Probability
 
-4\. When Data is Missing
+✔ 3. Local Question
 
-If a user asks something genuinely outside the syllabus, e.g.:
+User: How many practice hours are marked for Trigonometry?
+Bot:
 
-Does this course include Machine Learning?
+Trigonometry is allocated 8 practice hours.
 
-The bot correctly replies:
+✔ 4. Chapter Summary
 
-This information is not available in the syllabus.
+User: Summarize NCERT Chapter 3
+Bot:
 
-This demonstrates non-hallucinating behaviour.
+NCERT Chapter 3 covers “Trigonometry”.
+It is marked as high priority and allocated 8 practice hours.
 
-🚀 How to Run This Project
+🚀 How to Run the Project
+1. Create Pinecone Index
 
-Prerequisites
+Dimension must match embedding model (1536).
 
-n8n account (cloud or self-hosted)
+2. Import WF-SYLLABUS-INDEXER
 
-Pinecone account + API key
+Configure Drive credentials
 
-OpenAI API key
+Configure Pinecone credentials
 
-Telegram Bot (via BotFather)
+Run once to populate the index
 
-Environment Variables (example)
+3. Import SYLLABUS-ADVISOR-BOT
 
-In n8n settings or environment:
+Configure Telegram bot token
 
-PINECONE\_API\_KEY
+Connect AI Agent → Chat Model → Pinecone Search
 
-PINECONE\_ENVIRONMENT
+Activate workflow
 
-PINECONE\_INDEX\_NAME
+4. Test on Telegram
+⚠️ Limitations
 
-OPENAI\_API\_KEY
+Single syllabus only
 
-TELEGRAM\_BOT\_TOKEN
+No hybrid search (but can be added)
 
-Steps
+No multi-document cross-knowledge RAG
 
-Create Pinecone index
-
-Dimension must match the embedding model (e.g., 1536).
-
-Example name: icn8n-syllabus-index.
-
-Import WF-SYLLABUS-INDEXER JSON into n8n
-
-Configure:
-
-Google Drive credentials.
-
-Pinecone credentials.
-
-OpenAI credentials.
-
-Run once to index your syllabus file.
-
-Import SYLLABUS-ADVISOR-BOT JSON into n8n
-
-Configure:
-
-Telegram credentials.
-
-Connect AI Agent to:
-
-Chat Model node
-
-Pinecone – Syllabus search node.
-
-Activate workflow.
-
-Test from Telegram
-
-Message your bot:
-
-“List all topics in the syllabus”
-
-“What topics are marked HIGH priority?”
-
-“How many hours for Trigonometry?”
-
-⚠️ Limitations & Possible Improvements
-
-Current limitations
-
-Single syllabus / single board.
-
-Pure semantic search (no keyword/hybrid re-ranking).
-
-No per-user conversation memory beyond the current workflow run.
-
-Answers are English-only, matching the current syllabus language.
-
-Potential improvements
-
-Add metadata filters for board, class, year, subject.
-
-Use hybrid search (keyword + semantic) for more robust retrieval.
-
-Add answer citations (e.g., “Source: Row 12, Practice Hours table”).
-
-Extend to multi-document RAG: textbooks, assignments, question banks.
+No citations included in LLM answers
