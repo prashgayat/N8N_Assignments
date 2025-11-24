@@ -1,14 +1,15 @@
 # Syllabus Indexer & Advisor Bot — n8n RAG Assignment
 
 ## 1. Overview
-This project implements a two‑workflow RAG pipeline inside n8n: WF‑SYLLABUS‑INDEXER for ingestion and SYLLABUS‑ADVISOR‑BOT for retrieval and answering.
+This project implements a **two-workflow Retrieval-Augmented Generation (RAG)** system in n8n:
+- **WF-SYLLABUS-INDEXER** for PDF ingestion
+- **SYLLABUS-ADVISOR-BOT** for Telegram-based question answering
 
-## 2. High‑Level Architecture
-```
+## 2. High-Level Architecture
+```mermaid
 flowchart LR
     A[Syllabus PDF] --> B[WF-SYLLABUS-INDEXER]
-    B --> C[(Pinecone)]
-
+    B --> C[(Pinecone Vector DB)]
     D[Student Telegram] --> E[Telegram Trigger]
     E --> F[SYLLABUS-ADVISOR-BOT]
     F --> C
@@ -18,44 +19,57 @@ flowchart LR
 ```
 
 ## 3. Architecture (Nodes & Wiring)
+### Workflow A — WF-SYLLABUS-INDEXER
+- Manual Trigger → Download PDF → File Normalize → PDF→Text → Chunking → Embeddings → Pinecone Upsert
 
-### Workflow A — WF‑SYLLABUS‑INDEXER
-- **Manual Trigger** → runs indexing on demand.
-- **Google Drive: Download File** → loads syllabus PDF.
-- **File Structuring (Code)** → normalize binary.
-- **Move Binary → Text** → extract plain text.
-- **Chunking + Metadata (Code)** → chunk with overlap.
-- **OpenAI Embeddings** → vectorize chunks.
-- **Pinecone: Upsert** → store vectors.
+### Workflow B — SYLLABUS-ADVISOR-BOT
+- Telegram Trigger → Extract Query → AI Agent → Pinecone Search → LLM → Telegram Reply
 
-### Workflow B — SYLLABUS‑ADVISOR‑BOT
-- **Telegram Trigger** → receives student queries.
-- **Extract Query (Code)** → parse chatId + query.
-- **AI Agent** → orchestrates retrieval + reasoning.
-- **Pinecone Search** → Top‑K=15 retrieval.
-- **OpenAI Chat Model** → grounded answer.
-- **Telegram: Send Message** → deliver result.
+## 4. Design Decisions Table
+| Layer | Choice | Why | Trade-offs |
+|-------|--------|-----|------------|
+| Chunking | Fixed + Overlap | Works cleanly in n8n; safe boundaries | Less semantic precision |
+| Chunk Size | 300–500 chars | Ideal context size | Too small = noisy |
+| Overlap | 20–30% | Prevents lost context | More storage |
+| Embeddings | text-embedding-3-large | Strong semantic recall | Higher cost |
+| Vector DB | Pinecone | Fast, managed | External dependency |
+| Top-K | 15 | Needed for global syllabus queries | Higher LLM cost |
+| Search | Semantic | Handles paraphrases | No keyword fallback |
 
-## 4. WF‑SYLLABUS‑INDEXER (Deep Dive)
-Provides ingestion: PDF → text → chunk → embedding → Pinecone.
+## 5. Indexer Deep Dive
+1. Download syllabus  
+2. Convert to text  
+3. Chunk with metadata  
+4. Embed using OpenAI  
+5. Upsert to Pinecone  
 
-## 5. SYLLABUS‑ADVISOR‑BOT (Deep Dive)
-Handles real-time RAG: Telegram → vector search → answer.
+## 6. Advisor Bot Deep Dive
+1. Telegram receives query  
+2. Pinecone Top-K search  
+3. LLM synthesizes grounded answer  
+4. Reply via Telegram  
 
-## 6. AI System Prompt
-Strict grounding: no hallucinations, return all topics for global queries, etc.
+## 7. Prompting Rules
+- Always retrieve before answering  
+- No hallucinations  
+- Use synthesis for global queries  
+- Declare “not in syllabus” only when zero relevant chunks  
 
-## 7. Example Q&A
-Includes topic listing, priority mapping, and chapter summaries.
-
-## 8. How to Run
-1. Configure Pinecone Index.
-2. Import Indexer workflow and run once.
-3. Import Advisor Bot workflow.
-4. Test via Telegram.
+## 8. Running Steps
+1. Configure Pinecone  
+2. Import indexer workflow and run once  
+3. Import advisor workflow and activate  
+4. Chat via Telegram  
 
 ## 9. Limitations
-Single syllabus, no hybrid search, no multi-board routing.
+- Single syllabus  
+- No hybrid search  
+- No reranking  
+- No citations  
 
 ## 10. Future Extensions
-Metadata filters, multi-syllabus support, confidence scoring, hybrid search.
+- Hybrid search  
+- Reranking  
+- Multi-syllabus routing  
+- Confidence scoring  
+- Citation mode  
